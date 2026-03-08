@@ -1,458 +1,464 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import * as XLSX from "xlsx";
+import { saveAs } from "file-saver";
 import "./App.css";
 
-// ─── helpers ────────────────────────────────────────────────────────────────
-const fmt = (v) =>
-  v === "" || v === null || v === undefined
-    ? ""
-    : Number(v).toLocaleString("fr-DZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
 const num = (v) => parseFloat((v + "").replace(/\s/g, "").replace(",", ".")) || 0;
-
+const fmtNum = (v) => {
+  if (v === "" || v === null || v === undefined) return "";
+  const n = Number(v);
+  if (isNaN(n)) return "";
+  return n.toLocaleString("fr-DZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
 const emptyLot = () => ({
   id: Date.now() + Math.random(),
-  partenaire: "",
-  designation: "",
-  marche: "",
-  avenants: "",
-  montantEngageHT: "",
-  montantConsommeHT: "",
-  montantEngageTTC: "",
-  montantConsommeTTC: "",
+  partenaire: "", designation: "", marche: "", avenants: "",
+  engageHT: "", consommeHT: "", engageTTC: "", consommeTTC: "",
 });
 
-const SECTIONS = [
-  { id: "1A", label: "1-A  Acquisition de terrain", rubriqueKey: "acquisition", rubriqueLabel: "Acquisition terrain" },
-  { id: "1B", label: "1-B  Études Géotechniques (LABO, ÉTUDE DE SOL, GÉOMÈTRE…)", rubriqueKey: "geotechnique", rubriqueLabel: "Études Géotechniques" },
-  { id: "2",  label: "2  Études, Suivi et Contrôle (ÉTUDES, SUIVI, CTC)", rubriqueKey: "etudes", rubriqueLabel: "ÉTUDE, SUIVI ET CONTRÔLE" },
-  { id: "3A", label: "3-A  Réalisation Logements (TCE, GO, CES, CLIM, KIT CUISINE…)", rubriqueKey: "logements", rubriqueLabel: "LOGEMENTS" },
-  { id: "3B", label: "3-B  Réalisation Commerces (TCE, GO, Rideaux, Aluminium…)", rubriqueKey: "commerces", rubriqueLabel: "COMMERCES" },
-  { id: "3C", label: "3-C  Réalisation VRD (VRD, Aménagement, Espace vert, Clôture, Transfo…)", rubriqueKey: "vrd", rubriqueLabel: "V.R.D" },
-  { id: "4",  label: "4  Raccordements et Branchements", rubriqueKey: "branchements", rubriqueLabel: "BRANCHEMENTS ET RACCORDEMENTS" },
-  { id: "5",  label: "5  Prestations de Services (Expertise, Gardiennage, ANEP, Notaire…)", rubriqueKey: "prestations", rubriqueLabel: "PRESTATIONS DE SERVICES" },
+const GROUPS = [
+  { id:"G1", code:"01", label:"FONCIER", icon:"🏛️", color:"#0f4c75",
+    sections:[
+      { id:"1A", label:"1-A  Acquisition de terrain", rubKey:"acquisition" },
+      { id:"1B", label:"1-B  Études Géotechniques (LABO, ÉTUDE DE SOL, GÉOMÈTRE…)", rubKey:"geotechnique" },
+    ]},
+  { id:"G2", code:"02", label:"ÉTUDES, SUIVI ET CONTRÔLE", icon:"📐", color:"#1b4332",
+    sections:[
+      { id:"2", label:"2  Études, Suivi et Contrôle (ÉTUDES, SUIVI, CTC)", rubKey:"etudes" },
+    ]},
+  { id:"G3", code:"03", label:"RÉALISATION", icon:"🏗️", color:"#7b2d00",
+    sections:[
+      { id:"3A", label:"3-A  Réalisation Logements (TCE, GO, CES, CLIM, KIT CUISINE…)", rubKey:"logements" },
+      { id:"3B", label:"3-B  Réalisation Commerces (TCE, GO, Rideaux, Aluminium…)", rubKey:"commerces" },
+      { id:"3C", label:"3-C  Réalisation VRD (VRD, Aménagement, Espace vert, Clôture, Transfo…)", rubKey:"vrd" },
+    ]},
+  { id:"G4", code:"04", label:"RACCORDEMENTS ET BRANCHEMENTS", icon:"🔌", color:"#312e81",
+    sections:[
+      { id:"4", label:"4  Raccordements et Branchements", rubKey:"branchements" },
+    ]},
+  { id:"G5", code:"05", label:"PRESTATIONS DE SERVICES", icon:"🤝", color:"#831843",
+    sections:[
+      { id:"5", label:"5  Prestations de Services (Expertise, Gardiennage, ANEP, Notaire…)", rubKey:"prestations" },
+    ]},
 ];
+
+const ALL_SECTIONS = GROUPS.flatMap((g) => g.sections);
 
 const RECAP_ROWS = [
-  { key: "acquisition",  label: "Acquisition terrain" },
-  { key: "geotechnique", label: "Études Géotechniques" },
-  { key: "FONCIER",      label: "FONCIER",                          isTotal: true },
-  { key: "etudes",       label: "ÉTUDE, SUIVI ET CONTRÔLE",         isTotal: true },
-  { key: "logements",    label: "LOGEMENTS" },
-  { key: "commerces",    label: "COMMERCES" },
-  { key: "vrd",          label: "V.R.D" },
-  { key: "REALISATION",  label: "RÉALISATION",                      isTotal: true },
-  { key: "branchements", label: "BRANCHEMENTS ET RACCORDEMENTS",    isTotal: true },
-  { key: "prestations",  label: "PRESTATIONS DE SERVICES",          isTotal: true },
-  { key: "FRAIS_DIVERS", label: "FRAIS DIVERS & IMPÔTS ET TAXES",   isManual: true },
-  { key: "TOTAL_PRODUCTION", label: "TOTAL PRODUCTION",             isGrandTotal: true },
+  { key:"acquisition",     label:"Acquisition terrain",                   indent:true },
+  { key:"geotechnique",    label:"Études Géotechniques",                   indent:true },
+  { key:"FONCIER",         label:"TOTAL 01 — FONCIER",                     isTotal:true, color:"#0f4c75" },
+  { key:"etudes",          label:"TOTAL 02 — ÉTUDES, SUIVI & CONTRÔLE",    isTotal:true, color:"#1b4332" },
+  { key:"logements",       label:"Logements",                              indent:true },
+  { key:"commerces",       label:"Commerces",                              indent:true },
+  { key:"vrd",             label:"V.R.D",                                  indent:true },
+  { key:"REALISATION",     label:"TOTAL 03 — RÉALISATION",                 isTotal:true, color:"#7b2d00" },
+  { key:"branchements",    label:"TOTAL 04 — BRANCHEMENTS & RACC.",        isTotal:true, color:"#312e81" },
+  { key:"prestations",     label:"TOTAL 05 — PRESTATIONS DE SERVICES",     isTotal:true, color:"#831843" },
+  { key:"FRAIS_DIVERS",    label:"FRAIS DIVERS & IMPÔTS ET TAXES",         isManual:true },
+  { key:"TOTAL_PRODUCTION",label:"TOTAL GÉNÉRAL DE PRODUCTION",            isGrandTotal:true },
 ];
 
-// ─── style helpers ───────────────────────────────────────────────────────────
-const th = (w) => ({
-  padding: "10px 8px", fontSize: 11, fontWeight: 700, textAlign: "center",
-  borderRight: "1px solid rgba(255,255,255,.15)", minWidth: w,
-  whiteSpace: "normal", lineHeight: 1.3,
-});
-const td = (w, center = false) => ({
-  padding: "7px 8px", fontSize: 12,
-  borderBottom: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0",
-  minWidth: w, textAlign: center ? "center" : "left", verticalAlign: "middle",
-});
-const btnStyle = (bg) => ({
-  background: bg, color: "#fff", border: "none", borderRadius: 8,
-  padding: "8px 16px", cursor: "pointer", fontSize: 13, fontWeight: 600,
-});
+/* ── NumericInput ── */
+function NumericInput({ value, onChange, placeholder="0,00" }) {
+  const [display, setDisplay] = useState(value !== "" ? fmtNum(value) : "");
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!focused) setDisplay(value !== "" ? fmtNum(value) : ""); }, [value, focused]);
+  return (
+    <input
+      type="text" inputMode="decimal"
+      value={display}
+      placeholder={placeholder}
+      className="num-cell"
+      onFocus={() => { setFocused(true); setDisplay(value !== "" ? String(value) : ""); }}
+      onChange={(e) => {
+        const raw = e.target.value.replace(/[^\d.,]/g,"");
+        setDisplay(raw);
+        const p = parseFloat(raw.replace(",","."));
+        onChange(isNaN(p) ? "" : p);
+      }}
+      onBlur={() => { setFocused(false); setDisplay(value !== "" && value !== undefined ? fmtNum(value) : ""); }}
+    />
+  );
+}
 
-// ─── main component ──────────────────────────────────────────────────────────
+/* ══ APP ══ */
 export default function App() {
-  const [projectName, setProjectName] = useState("Projet Immobilier");
-  const [lots, setLots] = useState(() => {
-    const init = {};
-    SECTIONS.forEach((s) => (init[s.id] = [emptyLot()]));
-    return init;
-  });
-  const [fraisDivers, setFraisDivers] = useState({ engageHT: "", consommeHT: "", engageTTC: "", consommeTTC: "" });
-  const [activeSection, setActiveSection] = useState("recap");
-  const [saved, setSaved] = useState(false);
-  const [projects, setProjects] = useState([]);
-  const [showProjectList, setShowProjectList] = useState(false);
+  const [projectName,  setProjectName]  = useState("Projet Immobilier");
+  const [projectRef,   setProjectRef]   = useState("");
+  const [projectDate,  setProjectDate]  = useState(new Date().toISOString().slice(0,10));
+  const [lots,         setLots]         = useState(() => { const i={}; ALL_SECTIONS.forEach(s=>(i[s.id]=[emptyLot()])); return i; });
+  const [fraisDivers,  setFraisDivers]  = useState({ engageHT:"", consommeHT:"", engageTTC:"", consommeTTC:"" });
+  const [openGroups,   setOpenGroups]   = useState({ G1:true });
+  const [openSections, setOpenSections] = useState({});
+  const [activeTab,    setActiveTab]    = useState("saisie");
+  const [projects,     setProjects]     = useState([]);
+  const [saved,        setSaved]        = useState(false);
+  const [showProjList, setShowProjList] = useState(false);
 
-  // ── load on mount ──
   useEffect(() => {
     try {
-      const list = JSON.parse(localStorage.getItem("fc-projects-list") || "[]");
-      setProjects(list);
-      const last = localStorage.getItem("fc-last-project");
-      if (last) {
-        const data = JSON.parse(last);
-        setProjectName(data.projectName || "Projet Immobilier");
-        setLots(data.lots);
-        setFraisDivers(data.fraisDivers || { engageHT: "", consommeHT: "", engageTTC: "", consommeTTC: "" });
-      }
+      setProjects(JSON.parse(localStorage.getItem("fc2-list")||"[]"));
+      const last = localStorage.getItem("fc2-last");
+      if (last) loadData(JSON.parse(last));
     } catch {}
   }, []);
 
-  // ── save ──
+  const loadData = (d) => {
+    setProjectName(d.projectName||"Projet Immobilier");
+    setProjectRef(d.projectRef||""); setProjectDate(d.projectDate||new Date().toISOString().slice(0,10));
+    setLots(d.lots||{}); setFraisDivers(d.fraisDivers||{engageHT:"",consommeHT:"",engageTTC:"",consommeTTC:""});
+  };
+
   const handleSave = () => {
-    const data = { projectName, lots, fraisDivers, savedAt: new Date().toISOString() };
-    try {
-      const key = "fc-project-" + projectName.replace(/\s+/g, "_");
-      localStorage.setItem(key, JSON.stringify(data));
-      localStorage.setItem("fc-last-project", JSON.stringify(data));
-      const newList = [...new Set([...projects, projectName])];
-      localStorage.setItem("fc-projects-list", JSON.stringify(newList));
-      setProjects(newList);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      alert("Erreur sauvegarde: " + e.message);
-    }
+    const data = { projectName, projectRef, projectDate, lots, fraisDivers };
+    const key  = "fc2-"+projectName.replace(/\s+/g,"_");
+    localStorage.setItem(key, JSON.stringify(data));
+    localStorage.setItem("fc2-last", JSON.stringify(data));
+    const nl = [...new Set([...projects, projectName])];
+    localStorage.setItem("fc2-list", JSON.stringify(nl));
+    setProjects(nl); setSaved(true); setTimeout(()=>setSaved(false),2500);
   };
 
-  const handleNewProject = () => {
-    const name = prompt("Nom du nouveau projet :");
-    if (!name) return;
-    setProjectName(name);
-    const init = {};
-    SECTIONS.forEach((s) => (init[s.id] = [emptyLot()]));
-    setLots(init);
-    setFraisDivers({ engageHT: "", consommeHT: "", engageTTC: "", consommeTTC: "" });
-    setActiveSection("recap");
-    setShowProjectList(false);
+  const handleNew = () => {
+    const n = prompt("Nom du nouveau projet :"); if (!n) return;
+    setProjectName(n); setProjectRef(""); setProjectDate(new Date().toISOString().slice(0,10));
+    const i={}; ALL_SECTIONS.forEach(s=>(i[s.id]=[emptyLot()]));
+    setLots(i); setFraisDivers({engageHT:"",consommeHT:"",engageTTC:"",consommeTTC:""}); setShowProjList(false);
   };
 
-  const handleLoadProject = (name) => {
-    try {
-      const key = "fc-project-" + name.replace(/\s+/g, "_");
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const data = JSON.parse(raw);
-        setProjectName(data.projectName);
-        setLots(data.lots);
-        setFraisDivers(data.fraisDivers || { engageHT: "", consommeHT: "", engageTTC: "", consommeTTC: "" });
-      }
-      setShowProjectList(false);
-    } catch {}
+  const handleLoad   = (name) => { const r=localStorage.getItem("fc2-"+name.replace(/\s+/g,"_")); if(r) loadData(JSON.parse(r)); setShowProjList(false); };
+  const handleDelete = (name) => { if(!window.confirm(`Supprimer "${name}" ?`)) return; localStorage.removeItem("fc2-"+name.replace(/\s+/g,"_")); const nl=projects.filter(p=>p!==name); localStorage.setItem("fc2-list",JSON.stringify(nl)); setProjects(nl); };
+
+  const addLot    = (sid) => setLots(p=>({...p,[sid]:[...p[sid],emptyLot()]}));
+  const removeLot = (sid,id) => setLots(p=>({...p,[sid]:p[sid].filter(l=>l.id!==id)}));
+  const updateLot = (sid,id,f,v) => setLots(p=>({...p,[sid]:p[sid].map(l=>l.id===id?{...l,[f]:v}:l)}));
+
+  const secTotal = useCallback((sid) => {
+    const r = lots[sid]||[];
+    return { engageHT:r.reduce((s,l)=>s+num(l.engageHT),0), consommeHT:r.reduce((s,l)=>s+num(l.consommeHT),0), engageTTC:r.reduce((s,l)=>s+num(l.engageTTC),0), consommeTTC:r.reduce((s,l)=>s+num(l.consommeTTC),0) };
+  },[lots]);
+
+  const allTotals = useCallback(() => {
+    const m={};
+    ALL_SECTIONS.forEach(s=>{m[s.rubKey]=secTotal(s.id);});
+    const sum=(...keys)=>({ engageHT:keys.reduce((s,k)=>s+(m[k]?.engageHT||0),0), consommeHT:keys.reduce((s,k)=>s+(m[k]?.consommeHT||0),0), engageTTC:keys.reduce((s,k)=>s+(m[k]?.engageTTC||0),0), consommeTTC:keys.reduce((s,k)=>s+(m[k]?.consommeTTC||0),0) });
+    m["FONCIER"]=sum("acquisition","geotechnique");
+    m["REALISATION"]=sum("logements","commerces","vrd");
+    m["FRAIS_DIVERS"]={engageHT:num(fraisDivers.engageHT),consommeHT:num(fraisDivers.consommeHT),engageTTC:num(fraisDivers.engageTTC),consommeTTC:num(fraisDivers.consommeTTC)};
+    m["TOTAL_PRODUCTION"]=sum("FONCIER","etudes","REALISATION","branchements","prestations","FRAIS_DIVERS");
+    return m;
+  },[lots,fraisDivers,secTotal]);
+
+  const totals   = allTotals();
+  const grandTot = totals["TOTAL_PRODUCTION"];
+
+  const groupTotal = (g) => {
+    const keys=g.sections.map(s=>s.rubKey);
+    return { engageHT:keys.reduce((s,k)=>s+(totals[k]?.engageHT||0),0), consommeHT:keys.reduce((s,k)=>s+(totals[k]?.consommeHT||0),0), engageTTC:keys.reduce((s,k)=>s+(totals[k]?.engageTTC||0),0), consommeTTC:keys.reduce((s,k)=>s+(totals[k]?.consommeTTC||0),0) };
   };
 
-  const handleDeleteProject = (name) => {
-    if (!window.confirm(`Supprimer le projet "${name}" ?`)) return;
-    localStorage.removeItem("fc-project-" + name.replace(/\s+/g, "_"));
-    const newList = projects.filter((p) => p !== name);
-    localStorage.setItem("fc-projects-list", JSON.stringify(newList));
-    setProjects(newList);
+  /* Excel export */
+  const exportExcel = () => {
+    const wb = XLSX.utils.book_new();
+    ALL_SECTIONS.forEach(sec=>{
+      const rows=lots[sec.id]||[]; const st=secTotal(sec.id);
+      const data=[
+        ["N°","Partenaire Intervenant","Désignation des Lots","Marché/Contrat/Convention/BC","Avenants/DGD","Montant Engagé HT","Montant Consommé HT","Reste à Consommer HT","Montant Engagé TTC","Montant Consommé TTC","Reste à Consommer TTC"],
+        ...rows.map((l,i)=>[i+1,l.partenaire,l.designation,l.marche,l.avenants,num(l.engageHT),num(l.consommeHT),num(l.engageHT)-num(l.consommeHT),num(l.engageTTC),num(l.consommeTTC),num(l.engageTTC)-num(l.consommeTTC)]),
+        [],[,"","","","TOTAL",st.engageHT,st.consommeHT,st.engageHT-st.consommeHT,st.engageTTC,st.consommeTTC,st.engageTTC-st.consommeTTC],
+      ];
+      const ws=XLSX.utils.aoa_to_sheet(data); ws["!cols"]=[6,22,28,28,18,16,16,16,16,16,16].map(w=>({wch:w}));
+      XLSX.utils.book_append_sheet(wb,ws,sec.id+" "+sec.label.slice(0,18));
+    });
+    const recapData=[
+      [projectName,"",projectRef,"",projectDate],[],
+      ["N°","RUBRIQUE","ENGAGÉ HT","CONSOMMÉ HT","ÉCART HT","ENGAGÉ TTC","CONSOMMÉ TTC","ÉCART TTC","RATIO CONSO HT","RATIO/RUBR/ENGAG HT","RATIO/RUBR/CONSO HT"],
+      ...RECAP_ROWS.map((row,i)=>{
+        const t=totals[row.key]||{engageHT:0,consommeHT:0,engageTTC:0,consommeTTC:0};
+        return [i+1,row.label,t.engageHT,t.consommeHT,t.engageHT-t.consommeHT,t.engageTTC,t.consommeTTC,t.engageTTC-t.consommeTTC,
+          t.engageHT?(t.consommeHT/t.engageHT*100).toFixed(1)+"%":"-",
+          grandTot.engageHT?(t.engageHT/grandTot.engageHT*100).toFixed(1)+"%":"-",
+          grandTot.consommeHT?(t.consommeHT/grandTot.consommeHT*100).toFixed(1)+"%":"-",
+        ];
+      }),
+    ];
+    const ws2=XLSX.utils.aoa_to_sheet(recapData); ws2["!cols"]=[5,32,16,16,14,16,16,14,16,20,20].map(w=>({wch:w}));
+    XLSX.utils.book_append_sheet(wb,ws2,"RÉCAPITULATIF");
+    const buf=XLSX.write(wb,{bookType:"xlsx",type:"array"});
+    saveAs(new Blob([buf],{type:"application/octet-stream"}),`${projectName}_FicheCout.xlsx`);
   };
 
-  // ── lot CRUD ──
-  const addLot    = (secId) => setLots((p) => ({ ...p, [secId]: [...p[secId], emptyLot()] }));
-  const removeLot = (secId, id) => setLots((p) => ({ ...p, [secId]: p[secId].filter((l) => l.id !== id) }));
-  const updateLot = (secId, id, field, value) =>
-    setLots((p) => ({ ...p, [secId]: p[secId].map((l) => (l.id === id ? { ...l, [field]: value } : l)) }));
-
-  // ── totals ──
-  const sectionTotal = useCallback((secId) => {
-    const rows = lots[secId] || [];
-    return {
-      engageHT:    rows.reduce((s, l) => s + num(l.montantEngageHT), 0),
-      consommeHT:  rows.reduce((s, l) => s + num(l.montantConsommeHT), 0),
-      engageTTC:   rows.reduce((s, l) => s + num(l.montantEngageTTC), 0),
-      consommeTTC: rows.reduce((s, l) => s + num(l.montantConsommeTTC), 0),
+  /* Excel import */
+  const importExcel = (e) => {
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=(evt)=>{
+      try {
+        const wb=XLSX.read(evt.target.result,{type:"array"});
+        const newLots={...lots};
+        ALL_SECTIONS.forEach(sec=>{
+          const sn=wb.SheetNames.find(n=>n.startsWith(sec.id)); if(!sn) return;
+          const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1});
+          const data=rows.slice(1).filter(r=>r[0]&&!isNaN(Number(r[0])));
+          newLots[sec.id]=data.map(r=>({id:Date.now()+Math.random(),partenaire:r[1]||"",designation:r[2]||"",marche:r[3]||"",avenants:r[4]||"",engageHT:r[5]||"",consommeHT:r[6]||"",engageTTC:r[8]||"",consommeTTC:r[9]||""}));
+          if(newLots[sec.id].length===0) newLots[sec.id]=[emptyLot()];
+        });
+        setLots(newLots); alert("✅ Import réussi !");
+      } catch(err){ alert("Erreur import : "+err.message); }
     };
-  }, [lots]);
-
-  const totByRubrique = useCallback(() => {
-    const map = {};
-    SECTIONS.forEach((s) => { map[s.rubriqueKey] = sectionTotal(s.id); });
-    map["FONCIER"] = {
-      engageHT:    map.acquisition.engageHT    + map.geotechnique.engageHT,
-      consommeHT:  map.acquisition.consommeHT  + map.geotechnique.consommeHT,
-      engageTTC:   map.acquisition.engageTTC   + map.geotechnique.engageTTC,
-      consommeTTC: map.acquisition.consommeTTC + map.geotechnique.consommeTTC,
-    };
-    map["REALISATION"] = {
-      engageHT:    map.logements.engageHT    + map.commerces.engageHT    + map.vrd.engageHT,
-      consommeHT:  map.logements.consommeHT  + map.commerces.consommeHT  + map.vrd.consommeHT,
-      engageTTC:   map.logements.engageTTC   + map.commerces.engageTTC   + map.vrd.engageTTC,
-      consommeTTC: map.logements.consommeTTC + map.commerces.consommeTTC + map.vrd.consommeTTC,
-    };
-    map["FRAIS_DIVERS"] = {
-      engageHT:    num(fraisDivers.engageHT),
-      consommeHT:  num(fraisDivers.consommeHT),
-      engageTTC:   num(fraisDivers.engageTTC),
-      consommeTTC: num(fraisDivers.consommeTTC),
-    };
-    const keys = ["FONCIER", "etudes", "REALISATION", "branchements", "prestations", "FRAIS_DIVERS"];
-    map["TOTAL_PRODUCTION"] = {
-      engageHT:    keys.reduce((s, k) => s + (map[k]?.engageHT    || 0), 0),
-      consommeHT:  keys.reduce((s, k) => s + (map[k]?.consommeHT  || 0), 0),
-      engageTTC:   keys.reduce((s, k) => s + (map[k]?.engageTTC   || 0), 0),
-      consommeTTC: keys.reduce((s, k) => s + (map[k]?.consommeTTC || 0), 0),
-    };
-    return map;
-  }, [lots, fraisDivers, sectionTotal]);
-
-  const totals = totByRubrique();
-  const grandTotal = totals["TOTAL_PRODUCTION"];
-
-  const navItems = [
-    { id: "recap", label: "📊 Récapitulatif" },
-    { id: "1A",  label: "1-A · Terrain" },
-    { id: "1B",  label: "1-B · Géotechnique" },
-    { id: "2",   label: "2 · Études & Suivi" },
-    { id: "3A",  label: "3-A · Logements" },
-    { id: "3B",  label: "3-B · Commerces" },
-    { id: "3C",  label: "3-C · VRD" },
-    { id: "4",   label: "4 · Branchements" },
-    { id: "5",   label: "5 · Prestations" },
-  ];
+    reader.readAsArrayBuffer(file); e.target.value="";
+  };
 
   return (
     <div className="app">
-      {/* ── Header ── */}
-      <header className="header">
-        <span className="header-icon">🏗️</span>
-        <div className="header-title">
-          <input
-            className="project-name-input"
-            value={projectName}
-            onChange={(e) => setProjectName(e.target.value)}
-          />
-          <span className="header-sub">FICHE COÛT — RÉCAPITULATIF GÉNÉRAL</span>
+      {/* HEADER */}
+      <header className="header no-print">
+        <div className="header-left">
+          <div className="logo">🏗️</div>
+          <div className="header-titles">
+            <input className="proj-name-input" value={projectName} onChange={e=>setProjectName(e.target.value)} />
+            <div className="header-meta">
+              <input className="meta-input" placeholder="Référence projet" value={projectRef}  onChange={e=>setProjectRef(e.target.value)}  />
+              <input className="meta-input" type="date"                    value={projectDate} onChange={e=>setProjectDate(e.target.value)} />
+            </div>
+          </div>
         </div>
         <div className="header-actions">
-          <button onClick={handleNewProject} style={btnStyle("#475569")}>+ Nouveau</button>
-          <button onClick={() => setShowProjectList((p) => !p)} style={btnStyle("#2563eb")}>📂 Projets</button>
-          <button onClick={handleSave} style={btnStyle(saved ? "#16a34a" : "#059669")}>
-            {saved ? "✓ Sauvegardé" : "💾 Sauvegarder"}
-          </button>
+          <label className="btn btn-import">📥 Import Excel<input type="file" accept=".xlsx,.xls" onChange={importExcel} style={{display:"none"}} /></label>
+          <button className="btn btn-export"   onClick={exportExcel}>📊 Export Excel</button>
+          <button className="btn btn-print"    onClick={()=>window.print()}>🖨️ Imprimer</button>
+          <button className="btn btn-projects" onClick={()=>setShowProjList(p=>!p)}>📂 Projets</button>
+          <button className="btn btn-new"      onClick={handleNew}>+ Nouveau</button>
+          <button className="btn btn-save"     onClick={handleSave}>{saved?"✓ Sauvegardé":"💾 Sauvegarder"}</button>
         </div>
       </header>
 
-      {/* ── Project dropdown ── */}
-      {showProjectList && (
-        <div className="project-dropdown">
-          <div className="project-dropdown-title">PROJETS SAUVEGARDÉS</div>
-          {projects.length === 0 && <div className="project-empty">Aucun projet sauvegardé</div>}
-          {projects.map((p) => (
-            <div key={p} className="project-item">
-              <button className="project-load-btn" onClick={() => handleLoadProject(p)}>{p}</button>
-              <button className="project-delete-btn" onClick={() => handleDeleteProject(p)}>🗑</button>
+      {showProjList && (
+        <div className="proj-dropdown no-print">
+          <div className="proj-dropdown-hdr">PROJETS SAUVEGARDÉS</div>
+          {projects.length===0 && <p className="proj-empty">Aucun projet sauvegardé</p>}
+          {projects.map(p=>(
+            <div key={p} className="proj-row">
+              <button className="proj-load" onClick={()=>handleLoad(p)}>{p}</button>
+              <button className="proj-del"  onClick={()=>handleDelete(p)}>🗑</button>
             </div>
           ))}
         </div>
       )}
 
-      <div className="layout">
-        {/* ── Sidebar ── */}
-        <nav className="sidebar">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setActiveSection(item.id)}
-              className={`nav-btn ${activeSection === item.id ? "active" : ""}`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-
-        {/* ── Content ── */}
-        <main className="content">
-          {activeSection !== "recap" ? (
-            <SectionEditor
-              section={SECTIONS.find((s) => s.id === activeSection)}
-              lots={lots[activeSection] || []}
-              onAdd={() => addLot(activeSection)}
-              onRemove={(id) => removeLot(activeSection, id)}
-              onUpdate={(id, f, v) => updateLot(activeSection, id, f, v)}
-              total={sectionTotal(activeSection)}
-            />
-          ) : (
-            <RecapView
-              totals={totals}
-              grandTotal={grandTotal}
-              fraisDivers={fraisDivers}
-              setFraisDivers={setFraisDivers}
-            />
-          )}
-        </main>
-      </div>
-    </div>
-  );
-}
-
-// ─── Section Editor ──────────────────────────────────────────────────────────
-function SectionEditor({ section, lots, onAdd, onRemove, onUpdate, total }) {
-  const cols = [
-    { key: "partenaire",        label: "Partenaire Intervenant",              w: 150 },
-    { key: "designation",       label: "Désignation des Lots",                w: 200 },
-    { key: "marche",            label: "MARCHÉ / CONTRAT / CONVENTION / BC",  w: 170 },
-    { key: "avenants",          label: "AVENANTS / DGD",                      w: 130 },
-    { key: "montantEngageHT",   label: "Montant Total Engagé HT",             w: 150, num: true },
-    { key: "montantConsommeHT", label: "Montant Total Consommé HT",           w: 150, num: true },
-    { key: "montantEngageTTC",  label: "Montant Total Engagé TTC",            w: 150, num: true },
-    { key: "montantConsommeTTC",label: "Montant Total Consommé TTC",          w: 150, num: true },
-  ];
-
-  const resteHT  = total.engageHT  - total.consommeHT;
-  const resteTTC = total.engageTTC - total.consommeTTC;
-
-  return (
-    <div>
-      <h2 className="section-title">{section.label}</h2>
-
-      {/* Summary cards */}
-      <div className="summary-cards">
-        {[
-          { label: "Engagé HT",   val: total.engageHT,   color: "#1d4ed8" },
-          { label: "Consommé HT", val: total.consommeHT, color: "#0891b2" },
-          { label: "Reste à Consommer HT",  val: resteHT,  color: resteHT  < 0 ? "#dc2626" : "#16a34a" },
-          { label: "Engagé TTC",  val: total.engageTTC,  color: "#7c3aed" },
-          { label: "Consommé TTC",val: total.consommeTTC,color: "#be185d" },
-          { label: "Reste à Consommer TTC", val: resteTTC, color: resteTTC < 0 ? "#dc2626" : "#16a34a" },
-        ].map((c) => (
-          <div key={c.label} className="summary-card">
-            <div className="summary-card-label">{c.label}</div>
-            <div className="summary-card-value" style={{ color: c.color }}>{fmt(c.val)} DA</div>
-          </div>
+      {/* TABS */}
+      <div className="tabs no-print">
+        {[["saisie","✏️  Saisie des données"],["recap","📊  Récapitulatif"]].map(([id,lbl])=>(
+          <button key={id} className={`tab-btn ${activeTab===id?"active":""}`} onClick={()=>setActiveTab(id)}>{lbl}</button>
         ))}
       </div>
 
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th style={th(40)}>N°</th>
-              {cols.map((c) => <th key={c.key} style={th(c.w)}>{c.label}</th>)}
-              <th style={th(50)}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {lots.map((lot, i) => (
-              <tr key={lot.id} className={i % 2 === 0 ? "row-even" : "row-odd"}>
-                <td style={td(40, true)}>{i + 1}</td>
-                {cols.map((c) => (
-                  <td key={c.key} style={td(c.w)}>
-                    <input
-                      value={lot[c.key]}
-                      onChange={(e) => onUpdate(lot.id, c.key, e.target.value)}
-                      className={`cell-input ${c.num ? "num-input" : ""}`}
-                      placeholder={c.num ? "0,00" : ""}
-                    />
-                  </td>
-                ))}
-                <td style={td(50, true)}>
-                  <button onClick={() => onRemove(lot.id)} className="delete-btn">✕</button>
-                </td>
-              </tr>
+      {/* ═══ SAISIE ═══ */}
+      {activeTab==="saisie" && (
+        <div className="saisie-view">
+          {/* Grand total bar */}
+          <div className="grand-total-bar">
+            {[
+              {l:"Total Engagé HT",   v:grandTot.engageHT,   c:"#3b82f6"},
+              {l:"Total Consommé HT", v:grandTot.consommeHT, c:"#06b6d4"},
+              {l:"Reste à Conso HT",  v:grandTot.engageHT-grandTot.consommeHT, c:grandTot.engageHT-grandTot.consommeHT<0?"#ef4444":"#22c55e"},
+              {l:"Total Engagé TTC",  v:grandTot.engageTTC,  c:"#a855f7"},
+              {l:"Total Consommé TTC",v:grandTot.consommeTTC,c:"#ec4899"},
+            ].map(c=>(
+              <div key={c.l} className="gtbar-card">
+                <span className="gtbar-label">{c.l}</span>
+                <span className="gtbar-value" style={{color:c.c}}>{fmtNum(c.v)} DA</span>
+              </div>
             ))}
-          </tbody>
-          <tfoot>
-            <tr className="footer-row">
-              <td style={td(40, true)} colSpan={5} className="footer-label">TOTAL</td>
-              <td style={{ ...td(150), textAlign: "right" }} className="footer-val">{fmt(total.engageHT)}</td>
-              <td style={{ ...td(150), textAlign: "right" }} className="footer-val">{fmt(total.consommeHT)}</td>
-              <td style={{ ...td(150), textAlign: "right" }} className="footer-val">{fmt(total.engageTTC)}</td>
-              <td style={{ ...td(150), textAlign: "right" }} className="footer-val">{fmt(total.consommeTTC)}</td>
-              <td style={td(50)}></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-      <button onClick={onAdd} className="add-btn">+ Ajouter une ligne</button>
-    </div>
-  );
-}
-
-// ─── Recap View ──────────────────────────────────────────────────────────────
-function RecapView({ totals, grandTotal, fraisDivers, setFraisDivers }) {
-  const totalEngageHT = grandTotal.engageHT;
-
-  return (
-    <div>
-      <h2 className="section-title">📊 Récapitulatif Général</h2>
-
-      {/* Grand total cards */}
-      <div className="summary-cards" style={{ marginBottom: 20 }}>
-        {[
-          { label: "Total Engagé HT",   val: grandTotal.engageHT,   color: "#1d4ed8" },
-          { label: "Total Consommé HT", val: grandTotal.consommeHT, color: "#0891b2" },
-          { label: "Total Engagé TTC",  val: grandTotal.engageTTC,  color: "#7c3aed" },
-          { label: "Total Consommé TTC",val: grandTotal.consommeTTC,color: "#be185d" },
-        ].map((c) => (
-          <div key={c.label} className="summary-card summary-card-lg">
-            <div className="summary-card-label">{c.label}</div>
-            <div className="summary-card-value" style={{ color: c.color, fontSize: 16 }}>{fmt(c.val)} DA</div>
           </div>
-        ))}
-      </div>
 
-      {/* Frais divers */}
-      <div className="frais-box">
-        <div className="frais-title">FRAIS DIVERS &amp; IMPÔTS ET TAXES</div>
-        <div className="frais-inputs">
-          {[["engageHT","Engagé HT"],["consommeHT","Consommé HT"],["engageTTC","Engagé TTC"],["consommeTTC","Consommé TTC"]].map(([k, label]) => (
-            <label key={k} className="frais-label">
-              {label}
-              <input
-                value={fraisDivers[k]}
-                onChange={(e) => setFraisDivers((p) => ({ ...p, [k]: e.target.value }))}
-                className="frais-input"
-                placeholder="0,00"
-              />
-            </label>
-          ))}
+          {/* Accordion */}
+          {GROUPS.map(grp=>{
+            const gt=groupTotal(grp);
+            return (
+              <div key={grp.id} className="group-block">
+                <button className="group-header" style={{"--gc":grp.color}} onClick={()=>setOpenGroups(p=>({...p,[grp.id]:!p[grp.id]}))}>
+                  <span className="grp-icon">{grp.icon}</span>
+                  <span className="grp-code">{grp.code}</span>
+                  <span className="grp-lbl">{grp.label}</span>
+                  <div className="grp-totals">
+                    <span>Engagé HT : <strong>{fmtNum(gt.engageHT)}</strong></span>
+                    <span>Consommé HT : <strong>{fmtNum(gt.consommeHT)}</strong></span>
+                    <span>Engagé TTC : <strong>{fmtNum(gt.engageTTC)}</strong></span>
+                  </div>
+                  <span className="grp-chev">{openGroups[grp.id]?"▲":"▼"}</span>
+                </button>
+
+                {openGroups[grp.id] && (
+                  <div className="group-body">
+                    {grp.sections.map(sec=>{
+                      const st=secTotal(sec.id); const isOpen=openSections[sec.id];
+                      return (
+                        <div key={sec.id} className="section-block">
+                          <button className="section-header" onClick={()=>setOpenSections(p=>({...p,[sec.id]:!p[sec.id]}))}>
+                            <span className="sec-lbl">{sec.label}</span>
+                            <div className="sec-mini">
+                              <span>EHT: <strong>{fmtNum(st.engageHT)}</strong></span>
+                              <span>CHT: <strong>{fmtNum(st.consommeHT)}</strong></span>
+                              <span>ETTC: <strong>{fmtNum(st.engageTTC)}</strong></span>
+                              <span>CTTC: <strong>{fmtNum(st.consommeTTC)}</strong></span>
+                            </div>
+                            <span className="sec-chev">{isOpen?"▲":"▼"}</span>
+                          </button>
+
+                          {isOpen && (
+                            <div className="section-body">
+                              <div className="sec-cards">
+                                {[
+                                  {l:"Engagé HT",        v:st.engageHT,                 c:"#1d4ed8"},
+                                  {l:"Consommé HT",      v:st.consommeHT,               c:"#0e7490"},
+                                  {l:"Reste à Conso HT", v:st.engageHT-st.consommeHT,   c:st.engageHT-st.consommeHT<0?"#dc2626":"#16a34a"},
+                                  {l:"Engagé TTC",       v:st.engageTTC,                c:"#6d28d9"},
+                                  {l:"Consommé TTC",     v:st.consommeTTC,              c:"#9d174d"},
+                                  {l:"Reste à Conso TTC",v:st.engageTTC-st.consommeTTC, c:st.engageTTC-st.consommeTTC<0?"#dc2626":"#16a34a"},
+                                ].map(c=>(
+                                  <div key={c.l} className="sec-card">
+                                    <div className="sc-lbl">{c.l}</div>
+                                    <div className="sc-val" style={{color:c.c}}>{fmtNum(c.v)}</div>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="tbl-wrap">
+                                <table className="lot-table">
+                                  <thead>
+                                    <tr>
+                                      <th className="th-n">N°</th>
+                                      <th className="th-txt">Partenaire Intervenant</th>
+                                      <th className="th-wide">Désignation des Lots</th>
+                                      <th className="th-txt">Marché / Contrat / Convention / BC</th>
+                                      <th className="th-txt">Avenants / DGD</th>
+                                      <th className="th-num">Engagé HT</th>
+                                      <th className="th-num">Consommé HT</th>
+                                      <th className="th-calc">Reste HT</th>
+                                      <th className="th-num">Engagé TTC</th>
+                                      <th className="th-num">Consommé TTC</th>
+                                      <th className="th-calc">Reste TTC</th>
+                                      <th style={{width:36}}></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {(lots[sec.id]||[]).map((lot,i)=>{
+                                      const rHT=num(lot.engageHT)-num(lot.consommeHT);
+                                      const rTTC=num(lot.engageTTC)-num(lot.consommeTTC);
+                                      return (
+                                        <tr key={lot.id} className={i%2===0?"tr-even":"tr-odd"}>
+                                          <td className="td-n">{i+1}</td>
+                                          <td><input className="txt-cell" value={lot.partenaire}  onChange={e=>updateLot(sec.id,lot.id,"partenaire",e.target.value)}  placeholder="Partenaire…" /></td>
+                                          <td><input className="txt-cell" value={lot.designation} onChange={e=>updateLot(sec.id,lot.id,"designation",e.target.value)} placeholder="Désignation…" /></td>
+                                          <td><input className="txt-cell" value={lot.marche}       onChange={e=>updateLot(sec.id,lot.id,"marche",e.target.value)}       placeholder="Réf. marché…" /></td>
+                                          <td><input className="txt-cell" value={lot.avenants}     onChange={e=>updateLot(sec.id,lot.id,"avenants",e.target.value)}     placeholder="Avenants…" /></td>
+                                          <td><NumericInput value={lot.engageHT}    onChange={v=>updateLot(sec.id,lot.id,"engageHT",v)}    /></td>
+                                          <td><NumericInput value={lot.consommeHT}  onChange={v=>updateLot(sec.id,lot.id,"consommeHT",v)}  /></td>
+                                          <td className="td-calc" style={{color:rHT<0?"#ef4444":"#16a34a"}}>{fmtNum(rHT)}</td>
+                                          <td><NumericInput value={lot.engageTTC}   onChange={v=>updateLot(sec.id,lot.id,"engageTTC",v)}   /></td>
+                                          <td><NumericInput value={lot.consommeTTC} onChange={v=>updateLot(sec.id,lot.id,"consommeTTC",v)} /></td>
+                                          <td className="td-calc" style={{color:rTTC<0?"#ef4444":"#16a34a"}}>{fmtNum(rTTC)}</td>
+                                          <td><button className="del-btn" onClick={()=>removeLot(sec.id,lot.id)} title="Supprimer">✕</button></td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                  <tfoot>
+                                    <tr className="tr-total">
+                                      <td colSpan={5} className="td-tlbl">TOTAL SECTION</td>
+                                      <td className="td-tv">{fmtNum(st.engageHT)}</td>
+                                      <td className="td-tv">{fmtNum(st.consommeHT)}</td>
+                                      <td className="td-tv" style={{color:st.engageHT-st.consommeHT<0?"#fca5a5":"#86efac"}}>{fmtNum(st.engageHT-st.consommeHT)}</td>
+                                      <td className="td-tv">{fmtNum(st.engageTTC)}</td>
+                                      <td className="td-tv">{fmtNum(st.consommeTTC)}</td>
+                                      <td className="td-tv" style={{color:st.engageTTC-st.consommeTTC<0?"#fca5a5":"#86efac"}}>{fmtNum(st.engageTTC-st.consommeTTC)}</td>
+                                      <td></td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                              <button className="add-row-btn" onClick={()=>addLot(sec.id)}>+ Ajouter une ligne</button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
-      </div>
+      )}
 
-      {/* Recap table */}
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th style={th(35)}>N°</th>
-              <th style={th(220)}>RUBRIQUE</th>
-              <th style={th(130)}>ENGAGÉ DA HT</th>
-              <th style={th(130)}>CONSOMMÉ DA HT</th>
-              <th style={th(120)}>ÉCART HT</th>
-              <th style={th(130)}>ENGAGÉ DA TTC</th>
-              <th style={th(130)}>CONSOMMÉ DA TTC</th>
-              <th style={th(120)}>ÉCART TTC</th>
-              <th style={th(110)}>RATIO CONSO HT</th>
-              <th style={th(120)}>RATIO / RUBRIQUES / ENGAG. HT</th>
-              <th style={th(120)}>RATIO / RUBRIQUES / CONSO. HT</th>
-            </tr>
-          </thead>
-          <tbody>
-            {RECAP_ROWS.map((row, i) => {
-              const t = totals[row.key] || { engageHT: 0, consommeHT: 0, engageTTC: 0, consommeTTC: 0 };
-              const ecartHT  = t.engageHT  - t.consommeHT;
-              const ecartTTC = t.engageTTC - t.consommeTTC;
-              const ratioConsom  = t.engageHT              ? (t.consommeHT  / t.engageHT              * 100) : 0;
-              const ratioEngag   = totalEngageHT            ? (t.engageHT   / totalEngageHT            * 100) : 0;
-              const ratioConsDist= grandTotal.consommeHT   ? (t.consommeHT  / grandTotal.consommeHT   * 100) : 0;
+      {/* ═══ RÉCAP ═══ */}
+      {activeTab==="recap" && (
+        <div className="recap-view">
+          <div className="recap-hdr-info print-only-title">
+            <h2 className="recap-title">📊 Récapitulatif Général</h2>
+            <p className="recap-sub">{projectName}{projectRef&&` — Réf : ${projectRef}`} — Date : {projectDate}</p>
+          </div>
 
-              const rowClass = row.isGrandTotal ? "row-grand-total" : row.isTotal ? "row-total" : i % 2 === 0 ? "row-even" : "row-odd";
+          <div className="frais-box">
+            <div className="frais-title">FRAIS DIVERS &amp; IMPÔTS ET TAXES</div>
+            <div className="frais-grid">
+              {[["engageHT","Engagé HT"],["consommeHT","Consommé HT"],["engageTTC","Engagé TTC"],["consommeTTC","Consommé TTC"]].map(([k,lbl])=>(
+                <label key={k} className="frais-lbl">
+                  {lbl}
+                  <NumericInput value={fraisDivers[k]} onChange={v=>setFraisDivers(p=>({...p,[k]:v}))} />
+                </label>
+              ))}
+            </div>
+          </div>
 
-              return (
-                <tr key={row.key} className={rowClass}>
-                  <td style={td(35, true)}>{i + 1}</td>
-                  <td style={td(220)}>{row.label}</td>
-                  <td style={{ ...td(130), textAlign: "right" }}>{fmt(t.engageHT)}</td>
-                  <td style={{ ...td(130), textAlign: "right" }}>{fmt(t.consommeHT)}</td>
-                  <td style={{ ...td(120), textAlign: "right", color: ecartHT < 0 ? "#ef4444" : "inherit" }}>{fmt(ecartHT)}</td>
-                  <td style={{ ...td(130), textAlign: "right" }}>{fmt(t.engageTTC)}</td>
-                  <td style={{ ...td(130), textAlign: "right" }}>{fmt(t.consommeTTC)}</td>
-                  <td style={{ ...td(120), textAlign: "right", color: ecartTTC < 0 ? "#ef4444" : "inherit" }}>{fmt(ecartTTC)}</td>
-                  <td style={{ ...td(110), textAlign: "right" }}>{t.engageHT ? ratioConsom.toFixed(2) + "%" : "—"}</td>
-                  <td style={{ ...td(120), textAlign: "right" }}>{totalEngageHT ? ratioEngag.toFixed(2) + "%" : "—"}</td>
-                  <td style={{ ...td(120), textAlign: "right" }}>{grandTotal.consommeHT ? ratioConsDist.toFixed(2) + "%" : "—"}</td>
+          <div className="tbl-wrap">
+            <table className="recap-table">
+              <thead>
+                <tr>
+                  <th className="th-n">N°</th>
+                  <th style={{minWidth:240,textAlign:"left",padding:"10px 12px"}}>RUBRIQUE</th>
+                  <th className="th-num">ENGAGÉ DA HT</th>
+                  <th className="th-num">CONSOMMÉ DA HT</th>
+                  <th className="th-num">ÉCART HT</th>
+                  <th className="th-num">ENGAGÉ DA TTC</th>
+                  <th className="th-num">CONSOMMÉ DA TTC</th>
+                  <th className="th-num">ÉCART TTC</th>
+                  <th className="th-num">RATIO CONSO HT</th>
+                  <th className="th-num">RATIO/RUBR/ENGAG HT</th>
+                  <th className="th-num">RATIO/RUBR/CONSO HT</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              </thead>
+              <tbody>
+                {RECAP_ROWS.map((row,i)=>{
+                  const t=totals[row.key]||{engageHT:0,consommeHT:0,engageTTC:0,consommeTTC:0};
+                  const eHT=t.engageHT-t.consommeHT; const eTTC=t.engageTTC-t.consommeTTC;
+                  const r1=t.engageHT?(t.consommeHT/t.engageHT*100).toFixed(1)+"%":"—";
+                  const r2=grandTot.engageHT?(t.engageHT/grandTot.engageHT*100).toFixed(1)+"%":"—";
+                  const r3=grandTot.consommeHT?(t.consommeHT/grandTot.consommeHT*100).toFixed(1)+"%":"—";
+                  const cls=row.isGrandTotal?"tr-grand-total":row.isTotal?"tr-subtotal":row.indent?"tr-indent":i%2===0?"tr-even":"tr-odd";
+                  return (
+                    <tr key={row.key} className={cls} style={(row.isTotal||row.isGrandTotal)?{"--rc":row.color||"#0a2540"}:{}}>
+                      <td className="td-n">{i+1}</td>
+                      <td style={{padding:"8px 12px",fontWeight:row.isTotal||row.isGrandTotal?700:400,paddingLeft:row.indent?"28px":"12px"}}>{row.label}</td>
+                      <td className="td-r">{fmtNum(t.engageHT)}</td>
+                      <td className="td-r">{fmtNum(t.consommeHT)}</td>
+                      <td className="td-r" style={{color:eHT<0?"#ef4444":"inherit"}}>{fmtNum(eHT)}</td>
+                      <td className="td-r">{fmtNum(t.engageTTC)}</td>
+                      <td className="td-r">{fmtNum(t.consommeTTC)}</td>
+                      <td className="td-r" style={{color:eTTC<0?"#ef4444":"inherit"}}>{fmtNum(eTTC)}</td>
+                      <td className="td-r">{r1}</td>
+                      <td className="td-r">{r2}</td>
+                      <td className="td-r">{r3}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
